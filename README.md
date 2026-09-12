@@ -9,10 +9,6 @@ A minimal but complete starting point covering:
 - **Voice recording → transcription → editable Word (.docx) report**
 - **Email a secure download link (API key) to the patient**
 
-⚠️ This is a functional scaffold for you to build on, not a HIPAA/GDPR-compliant
-production system. Before handling real patient data you'll need: HTTPS everywhere,
-encrypted storage, audit logging, proper key rotation, a compliant email/SMS provider,
-and a signed BAA with any cloud vendor you use.
 
 ## Backend setup
 
