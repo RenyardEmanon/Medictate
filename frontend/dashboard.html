@@ -19,6 +19,16 @@
 
   <div class="card" id="doctorBoxWrap" style="display:none; margin-top: 20px;"></div>
 
+  <div class="card" id="chooseDoctorWrap" style="display:none; margin-top: 20px;">
+    <h1>Choose a doctor</h1>
+    <div id="doctorListWrap">Loading...</div>
+  </div>
+
+  <div class="card" id="pendingRequestsWrap" style="display:none; margin-top: 20px;">
+    <h1>Pending patient requests</h1>
+    <div id="pendingRequestsList">Loading...</div>
+  </div>
+
   <div class="card" id="myReportsWrap" style="display:none; margin-top: 20px;">
     <h1>Your Reports</h1>
     <div id="myReportsList">Loading...</div>
@@ -93,8 +103,9 @@
       document.getElementById("uploadFormWrap").style.display = "none";
 
       const wrap = document.getElementById("doctorBoxWrap");
-      wrap.style.display = "block";
+
       if (user.assigned_doctor) {
+        wrap.style.display = "block";
         wrap.innerHTML = `
           <div class="doctor-box">
             <div class="avatar">${user.assigned_doctor.name.charAt(0).toUpperCase()}</div>
@@ -104,13 +115,17 @@
             </div>
           </div>
         `;
+        document.getElementById("myReportsWrap").style.display = "block";
+        loadMyReports();
       } else {
-        wrap.innerHTML = `<p>No doctor assigned yet.</p>`;
+        // No doctor yet - show the doctor-selection list instead.
+        wrap.style.display = "none";
+        document.getElementById("chooseDoctorWrap").style.display = "block";
+        loadDoctorList();
       }
-
-      document.getElementById("myReportsWrap").style.display = "block";
-      loadMyReports();
     } else {
+      document.getElementById("pendingRequestsWrap").style.display = "block";
+      loadPendingRequests();
       loadDoctorPatients();
     }
   }
@@ -136,6 +151,110 @@
       `).join("");
     } catch (err) {
       listEl.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  // ---- Patient: browse doctors and send a request ----
+
+  async function loadDoctorList() {
+    const wrap = document.getElementById("doctorListWrap");
+    try {
+      const { doctors } = await apiFetch("/api/auth/doctors");
+      if (!doctors.length) {
+        wrap.innerHTML = `<p>No doctors available right now.</p>`;
+        return;
+      }
+      wrap.innerHTML = doctors.map(d => {
+        let actionHtml;
+        if (d.request_status === "pending") {
+          actionHtml = `<span class="badge">Request pending</span>`;
+        } else if (d.request_status === "accepted") {
+          actionHtml = `<span class="badge">Accepted</span>`;
+        } else {
+          actionHtml = `<button type="button" class="requestBtn" data-doctor-id="${d.id}">Request this doctor</button>`;
+        }
+        return `
+          <div class="doctor-box" style="margin-bottom: 12px;">
+            <div class="avatar">${d.name.charAt(0).toUpperCase()}</div>
+            <div style="flex:1;">
+              <strong>${d.name}</strong><br/>
+              <span>${d.specialty || "Radiologist"}</span>
+            </div>
+            ${actionHtml}
+          </div>
+        `;
+      }).join("");
+
+      wrap.querySelectorAll(".requestBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiFetch("/api/auth/request-doctor", {
+              method: "POST",
+              body: JSON.stringify({ doctor_id: parseInt(btn.dataset.doctorId, 10) }),
+            });
+            loadDoctorList(); // refresh so the button becomes "Request pending"
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      wrap.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  // ---- Doctor: view + accept/reject pending patient requests ----
+
+  async function loadPendingRequests() {
+    const wrap = document.getElementById("pendingRequestsList");
+    try {
+      const { requests } = await apiFetch("/api/auth/pending-requests");
+      if (!requests.length) {
+        wrap.innerHTML = `<p>No pending requests.</p>`;
+        return;
+      }
+      wrap.innerHTML = requests.map(r => `
+        <div class="doctor-box" style="margin-bottom: 12px;">
+          <div class="avatar">${r.patient_name.charAt(0).toUpperCase()}</div>
+          <div style="flex:1;">
+            <strong>${r.patient_name}</strong><br/>
+            <span>${r.patient_email}</span>
+          </div>
+          <button type="button" class="acceptBtn" data-request-id="${r.id}">Accept</button>
+          <button type="button" class="secondary rejectBtn" data-request-id="${r.id}">Reject</button>
+        </div>
+      `).join("");
+
+      wrap.querySelectorAll(".acceptBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiFetch(`/api/auth/requests/${btn.dataset.requestId}/accept`, { method: "POST" });
+            loadPendingRequests();
+            loadDoctorPatients();
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+
+      wrap.querySelectorAll(".rejectBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiFetch(`/api/auth/requests/${btn.dataset.requestId}/reject`, { method: "POST" });
+            loadPendingRequests();
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      wrap.innerHTML = `<p class="msg error">${err.message}</p>`;
     }
   }
 
