@@ -19,27 +19,9 @@
 
   <div class="card" id="doctorBoxWrap" style="display:none; margin-top: 20px;"></div>
 
-  <!-- Voice dictation - doctor-only, independent of scans -->
-  <div class="card" id="recordCardWrap" style="display:none; margin-top: 20px;">
-    <h1>Record Voice Report</h1>
-    <div id="recordPatientWrap">
-      <label>Select a patient</label>
-      <select id="recordPatientSelect"></select>
-    </div>
-
-    <p id="recordStatus" class="msg"></p>
-    <button type="button" id="recordBtn">🎙️ Start Recording</button>
-
-    <div id="transcriptWrap" style="display:none; margin-top: 16px;">
-      <label>Transcript (editable)</label>
-      <textarea id="transcriptText" style="min-height: 180px;"></textarea>
-      <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <button type="button" id="saveCorrectionBtn">Save changes</button>
-        <button type="button" id="downloadReportBtn" class="secondary">Download .docx</button>
-        <button type="button" id="sendToPatientBtn" class="secondary">Send to patient</button>
-      </div>
-      <p id="reportActionMsg" class="msg"></p>
-    </div>
+  <div class="card" id="myReportsWrap" style="display:none; margin-top: 20px;">
+    <h1>Your Reports</h1>
+    <div id="myReportsList">Loading...</div>
   </div>
 
   <div class="card" id="patientsCardWrap" style="display:none; margin-top: 20px;">
@@ -52,10 +34,20 @@
     <form id="uploadForm">
       <label>File (image / PDF)</label>
       <input type="file" id="scanFile" accept=".png,.jpg,.jpeg,.pdf,.dcm" required />
+
       <label>Body part</label>
       <input type="text" id="bodyPart" placeholder="e.g. Chest" />
+
       <label>Notes</label>
       <textarea id="notes" placeholder="Optional notes"></textarea>
+
+      <label>Voice report (optional)</label>
+      <div>
+        <button type="button" id="recordBtn">🎙️ Start Recording</button>
+        <span id="recordIndicator" style="margin-left: 10px; color: var(--success); display:none;">● Voice note attached</span>
+      </div>
+      <p id="recordStatus" class="msg"></p>
+
       <button type="submit">Upload</button>
       <p id="uploadMsg" class="msg"></p>
     </form>
@@ -78,7 +70,7 @@
   let currentUser = null;
   let mediaRecorder = null;
   let recordedChunks = [];
-  let activeReportId = null;
+  let recordedBlob = null; // holds the finished recording until form submit
 
   async function loadMe() {
     try {
@@ -115,10 +107,35 @@
       } else {
         wrap.innerHTML = `<p>No doctor assigned yet.</p>`;
       }
+
+      document.getElementById("myReportsWrap").style.display = "block";
+      loadMyReports();
     } else {
-      // Doctor - always show the recording card, independent of scans
-      document.getElementById("recordCardWrap").style.display = "block";
       loadDoctorPatients();
+    }
+  }
+
+  async function loadMyReports() {
+    const listEl = document.getElementById("myReportsList");
+    try {
+      const { reports } = await apiFetch("/api/reports/my");
+      if (!reports.length) {
+        listEl.innerHTML = `<p>No reports yet.</p>`;
+        return;
+      }
+      listEl.innerHTML = reports.map(r => `
+        <div style="padding: 14px 0; border-bottom: 1px solid var(--border);">
+          <p style="margin:0 0 6px; color: var(--muted); font-size: 13px;">
+            ${new Date(r.created_at).toLocaleString()}
+          </p>
+          <p style="margin:0 0 10px; white-space: pre-wrap; line-height: 1.6;">${r.transcript_text}</p>
+          <a href="/api/reports/${r.id}/download" target="_blank">
+            <button type="button" class="secondary">Download as Word</button>
+          </a>
+        </div>
+      `).join("");
+    } catch (err) {
+      listEl.innerHTML = `<p class="msg error">${err.message}</p>`;
     }
   }
 
@@ -126,7 +143,6 @@
     const cardWrap = document.getElementById("patientsCardWrap");
     const listWrap = document.getElementById("patientsListWrap");
     const uploadWrap = document.getElementById("uploadFormWrap");
-    const recordSelect = document.getElementById("recordPatientSelect");
     cardWrap.style.display = "block";
 
     try {
@@ -135,20 +151,16 @@
       if (!patients.length) {
         listWrap.innerHTML = `<p>No patients under you.</p>`;
         uploadWrap.style.display = "none";
-        document.getElementById("recordPatientWrap").innerHTML = `<p>No patients under you yet - dictation needs a patient to attach the report to.</p>`;
-        document.getElementById("recordBtn").disabled = true;
         return;
       }
 
-      const optionsHtml = patients.map(p => `<option value="${p.id}">${p.name} (${p.email})</option>`).join("");
-
       listWrap.innerHTML = `
         <label>Select a patient</label>
-        <select id="patientSelect">${optionsHtml}</select>
+        <select id="patientSelect">
+          ${patients.map(p => `<option value="${p.id}">${p.name} (${p.email})</option>`).join("")}
+        </select>
       `;
       uploadWrap.style.display = "block";
-
-      recordSelect.innerHTML = optionsHtml;
     } catch (err) {
       listWrap.innerHTML = `<p class="msg error">${err.message}</p>`;
     }
@@ -178,12 +190,7 @@
   document.getElementById("recordBtn").addEventListener("click", async () => {
     const btn = document.getElementById("recordBtn");
     const status = document.getElementById("recordStatus");
-    const patientSelect = document.getElementById("recordPatientSelect");
-
-    if (!patientSelect.value) {
-      showMsg(status, "Please select a patient first.", "error");
-      return;
-    }
+    const indicator = document.getElementById("recordIndicator");
 
     if (!mediaRecorder || mediaRecorder.state === "inactive") {
       try {
@@ -195,15 +202,17 @@
           if (e.data.size > 0) recordedChunks.push(e.data);
         };
 
-        mediaRecorder.onstop = async () => {
+        mediaRecorder.onstop = () => {
           stream.getTracks().forEach(track => track.stop());
-          const blob = new Blob(recordedChunks, { type: "audio/webm" });
-          await uploadRecording(blob, patientSelect.value);
+          recordedBlob = new Blob(recordedChunks, { type: "audio/webm" });
+          indicator.style.display = "inline";
+          showMsg(status, "Recording captured. It'll be transcribed when you click Upload.", "success");
         };
 
         mediaRecorder.start();
         btn.textContent = "⏹️ Stop Recording";
-        patientSelect.disabled = true;
+        indicator.style.display = "none";
+        recordedBlob = null;
         showMsg(status, "Recording... speak your findings, then click Stop.", "success");
       } catch (err) {
         showMsg(status, "Could not access microphone: " + err.message, "error");
@@ -211,57 +220,6 @@
     } else {
       mediaRecorder.stop();
       btn.textContent = "🎙️ Start Recording";
-      showMsg(status, "Processing recording...", "success");
-    }
-  });
-
-  async function uploadRecording(blob, patientId) {
-    const status = document.getElementById("recordStatus");
-    const patientSelect = document.getElementById("recordPatientSelect");
-    const formData = new FormData();
-    formData.append("audio", blob, "recording.webm");
-    formData.append("patient_id", patientId);
-
-    try {
-      const { report } = await apiUpload("/api/reports/record", formData);
-      activeReportId = report.id;
-      document.getElementById("transcriptText").value = report.transcript_text;
-      document.getElementById("transcriptWrap").style.display = "block";
-      showMsg(status, `Transcribed successfully for ${report.patient_name}. Review and edit below.`, "success");
-    } catch (err) {
-      showMsg(status, err.message, "error");
-    } finally {
-      patientSelect.disabled = false;
-    }
-  }
-
-  document.getElementById("saveCorrectionBtn").addEventListener("click", async () => {
-    const msg = document.getElementById("reportActionMsg");
-    if (!activeReportId) return;
-    try {
-      await apiFetch(`/api/reports/${activeReportId}/correct`, {
-        method: "PUT",
-        body: JSON.stringify({ transcript_text: document.getElementById("transcriptText").value }),
-      });
-      showMsg(msg, "Report updated.", "success");
-    } catch (err) {
-      showMsg(msg, err.message, "error");
-    }
-  });
-
-  document.getElementById("downloadReportBtn").addEventListener("click", () => {
-    if (!activeReportId) return;
-    window.open(`/api/reports/${activeReportId}/download`, "_blank");
-  });
-
-  document.getElementById("sendToPatientBtn").addEventListener("click", async () => {
-    const msg = document.getElementById("reportActionMsg");
-    if (!activeReportId) return;
-    try {
-      const result = await apiFetch(`/api/reports/${activeReportId}/send-to-patient`, { method: "POST" });
-      showMsg(msg, result.message, "success");
-    } catch (err) {
-      showMsg(msg, err.message, "error");
     }
   });
 
@@ -291,12 +249,24 @@
     const patientSelect = document.getElementById("patientSelect");
     if (patientSelect) formData.append("patient_id", patientSelect.value);
 
+    if (recordedBlob) {
+      formData.append("audio", recordedBlob, "recording.webm");
+    }
+
     try {
-      await apiUpload("/api/scans/upload", formData);
-      showMsg(msg, "Scan uploaded successfully.", "success");
+      const result = await apiUpload("/api/scans/upload", formData);
+      let successMsg = "Scan uploaded successfully.";
+      if (result.report) successMsg += " Voice report transcribed and attached.";
+      if (result.transcription_warning) successMsg += ` (Note: ${result.transcription_warning})`;
+      showMsg(msg, successMsg, result.report || !recordedBlob ? "success" : "error");
+
       fileInput.value = "";
       document.getElementById("bodyPart").value = "";
       document.getElementById("notes").value = "";
+      recordedBlob = null;
+      document.getElementById("recordIndicator").style.display = "none";
+      document.getElementById("recordStatus").textContent = "";
+
       loadScans();
     } catch (err) {
       showMsg(msg, err.message, "error");
