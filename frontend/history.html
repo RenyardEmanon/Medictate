@@ -53,7 +53,7 @@
         <td>${s.body_part || "-"}</td>
         <td><span class="badge">${s.status}</span></td>
         <td>${new Date(s.uploaded_at).toLocaleString()}</td>
-        <td><a href="${'http://localhost:5000/api/scans/' + s.id + '/file'}" target="_blank">View</a></td>
+        <td><a href="${'/api/scans/' + s.id + '/file'}" target="_blank">View</a></td>
       </tr>
     `).join("");
   } catch (err) {

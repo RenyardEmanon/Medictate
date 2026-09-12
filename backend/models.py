@@ -122,7 +122,7 @@ class Scan(db.Model):
 class Report(db.Model):
     """A voice-dictated radiology report.
 
-    scan_id is now OPTIONAL - a doctor can dictate a report for a patient
+    scan_id is OPTIONAL - a doctor can dictate a report for a patient
     directly, without it being tied to any specific uploaded scan.
     patient_id/doctor_id are stored directly on the report so it always
     knows who it's for/from, whether or not a scan exists.

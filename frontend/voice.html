@@ -128,7 +128,9 @@ document.getElementById("saveBtn").addEventListener("click", async () => {
 
 document.getElementById("downloadBtn").addEventListener("click", () => {
   if (!currentReport) return;
-  window.open(`http://localhost:5000/api/reports/${currentReport.id}/download`, "_blank");
+  // Was: http://localhost:5000/api/reports/... — now relative so it works
+  // against whatever domain this page is actually served from.
+  window.open(`/api/reports/${currentReport.id}/download`, "_blank");
 });
 
 document.getElementById("sendBtn").addEventListener("click", async () => {
