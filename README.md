@@ -1,4 +1,4 @@
-# RadConnect — Radiology Platform Scaffold
+# MEDICTATE — Radiology Platform Scaffold
 
 A minimal but complete starting point covering:
 
