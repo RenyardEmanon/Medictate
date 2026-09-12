@@ -1,0 +1,8 @@
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Login==0.6.3
+Flask-Mail==0.9.1
+Flask-Cors==4.0.1
+python-docx==1.1.2
+Werkzeug==3.0.3
+SpeechRecognition==3.10.4

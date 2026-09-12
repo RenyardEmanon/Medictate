@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Upload Scan - Medictate</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body>
+<nav>
+  <a href="home.html" class="brand">Medictate</a>
+  <div>
+    <a href="home.html">Home</a>
+    <a href="upload.html">Upload Scan</a>
+    <a href="history.html">History</a>
+    <a href="voice.html">Voice Report</a>
+    <a href="#" id="logoutLink">Logout</a>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h1>Upload a scan</h1>
+    <form id="uploadForm">
+      <div id="patientIdWrap" style="display:none;">
+        <label>Patient ID (doctor upload)</label>
+        <input type="number" id="patient_id" />
+      </div>
+      <label>Body part</label>
+      <input type="text" id="body_part" placeholder="e.g. Chest, Knee, Skull" />
+      <label>Notes (optional)</label>
+      <textarea id="notes" placeholder="Clinical notes / reason for scan"></textarea>
+      <label>Scan file (jpg, png, dcm, pdf)</label>
+      <input type="file" id="file" accept=".jpg,.jpeg,.png,.dcm,.pdf" required />
+      <button type="submit">Upload</button>
+      <p id="msg" class="msg"></p>
+    </form>
+  </div>
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+(async () => {
+  const user = await requireLogin();
+  if (!user) return;
+  if (user.role === "doctor") {
+    document.getElementById("patientIdWrap").style.display = "block";
+  }
+})();
+
+document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("msg");
+  const formData = new FormData();
+  formData.append("file", document.getElementById("file").files[0]);
+  formData.append("body_part", document.getElementById("body_part").value);
+  formData.append("notes", document.getElementById("notes").value);
+  const patientId = document.getElementById("patient_id")?.value;
+  if (patientId) formData.append("patient_id", patientId);
+
+  try {
+    const data = await apiFetch("/scans/upload", { method: "POST", body: formData });
+    showMsg(msg, `Uploaded successfully (Scan #${data.scan.id}).`, "success");
+    e.target.reset();
+  } catch (err) {
+    showMsg(msg, err.message, "error");
+  }
+});
+
+document.getElementById("logoutLink").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await apiFetch("/auth/logout", { method: "POST" });
+  window.location.href = "login.html";
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Dashboard - RadConnect</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body>
+<nav>
+  <a href="home.html" class="brand">RadConnect</a>
+  <div><a href="#" id="logoutLink">Logout</a></div>
+</nav>
+
+<div class="container" style="max-width: 900px;">
+
+  <div class="card">
+    <div id="userSummary">Loading...</div>
+  </div>
+
+  <div class="card" id="doctorBoxWrap" style="display:none; margin-top: 20px;"></div>
+
+  <!-- Voice dictation - doctor-only, independent of scans -->
+  <div class="card" id="recordCardWrap" style="display:none; margin-top: 20px;">
+    <h1>Record Voice Report</h1>
+    <div id="recordPatientWrap">
+      <label>Select a patient</label>
+      <select id="recordPatientSelect"></select>
+    </div>
+
+    <p id="recordStatus" class="msg"></p>
+    <button type="button" id="recordBtn">🎙️ Start Recording</button>
+
+    <div id="transcriptWrap" style="display:none; margin-top: 16px;">
+      <label>Transcript (editable)</label>
+      <textarea id="transcriptText" style="min-height: 180px;"></textarea>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button type="button" id="saveCorrectionBtn">Save changes</button>
+        <button type="button" id="downloadReportBtn" class="secondary">Download .docx</button>
+        <button type="button" id="sendToPatientBtn" class="secondary">Send to patient</button>
+      </div>
+      <p id="reportActionMsg" class="msg"></p>
+    </div>
+  </div>
+
+  <div class="card" id="patientsCardWrap" style="display:none; margin-top: 20px;">
+    <h1>Your Patients</h1>
+    <div id="patientsListWrap">Loading...</div>
+  </div>
+
+  <div class="card" id="uploadFormWrap" style="display:none; margin-top: 20px;">
+    <h1>Upload a scan</h1>
+    <form id="uploadForm">
+      <label>File (image / PDF)</label>
+      <input type="file" id="scanFile" accept=".png,.jpg,.jpeg,.pdf,.dcm" required />
+      <label>Body part</label>
+      <input type="text" id="bodyPart" placeholder="e.g. Chest" />
+      <label>Notes</label>
+      <textarea id="notes" placeholder="Optional notes"></textarea>
+      <button type="submit">Upload</button>
+      <p id="uploadMsg" class="msg"></p>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top: 20px;">
+    <h1>Scan history</h1>
+    <table id="scanTable">
+      <thead>
+        <tr><th>File</th><th>Body part</th><th>Status</th><th>Uploaded</th></tr>
+      </thead>
+      <tbody><tr><td colspan="4">Loading...</td></tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+  let currentUser = null;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let activeReportId = null;
+
+  async function loadMe() {
+    try {
+      const { user } = await apiFetch("/api/auth/me");
+      return user;
+    } catch (err) {
+      window.location.href = "login.html";
+      return null;
+    }
+  }
+
+  function renderUser(user) {
+    const el = document.getElementById("userSummary");
+    el.innerHTML = `
+      <h1>Welcome, ${user.name}</h1>
+      <p>${user.email} &nbsp; <span class="badge">${user.role}</span>${user.specialty ? ` &middot; ${user.specialty}` : ""}</p>
+    `;
+
+    if (user.role === "patient") {
+      document.getElementById("uploadFormWrap").style.display = "none";
+
+      const wrap = document.getElementById("doctorBoxWrap");
+      wrap.style.display = "block";
+      if (user.assigned_doctor) {
+        wrap.innerHTML = `
+          <div class="doctor-box">
+            <div class="avatar">${user.assigned_doctor.name.charAt(0).toUpperCase()}</div>
+            <div>
+              <strong>Your doctor: ${user.assigned_doctor.name}</strong><br/>
+              <span>${user.assigned_doctor.specialty || "Radiologist"}</span>
+            </div>
+          </div>
+        `;
+      } else {
+        wrap.innerHTML = `<p>No doctor assigned yet.</p>`;
+      }
+    } else {
+      // Doctor - always show the recording card, independent of scans
+      document.getElementById("recordCardWrap").style.display = "block";
+      loadDoctorPatients();
+    }
+  }
+
+  async function loadDoctorPatients() {
+    const cardWrap = document.getElementById("patientsCardWrap");
+    const listWrap = document.getElementById("patientsListWrap");
+    const uploadWrap = document.getElementById("uploadFormWrap");
+    const recordSelect = document.getElementById("recordPatientSelect");
+    cardWrap.style.display = "block";
+
+    try {
+      const { patients } = await apiFetch("/api/auth/my-patients");
+
+      if (!patients.length) {
+        listWrap.innerHTML = `<p>No patients under you.</p>`;
+        uploadWrap.style.display = "none";
+        document.getElementById("recordPatientWrap").innerHTML = `<p>No patients under you yet - dictation needs a patient to attach the report to.</p>`;
+        document.getElementById("recordBtn").disabled = true;
+        return;
+      }
+
+      const optionsHtml = patients.map(p => `<option value="${p.id}">${p.name} (${p.email})</option>`).join("");
+
+      listWrap.innerHTML = `
+        <label>Select a patient</label>
+        <select id="patientSelect">${optionsHtml}</select>
+      `;
+      uploadWrap.style.display = "block";
+
+      recordSelect.innerHTML = optionsHtml;
+    } catch (err) {
+      listWrap.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  async function loadScans() {
+    const tbody = document.querySelector("#scanTable tbody");
+    try {
+      const { scans } = await apiFetch("/api/scans/history");
+      if (!scans.length) {
+        tbody.innerHTML = `<tr><td colspan="4">No scans yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = scans.map(s => `
+        <tr>
+          <td>${s.filename}</td>
+          <td>${s.body_part || "-"}</td>
+          <td>${s.status}</td>
+          <td>${new Date(s.uploaded_at).toLocaleString()}</td>
+        </tr>
+      `).join("");
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="4" class="msg error">${err.message}</td></tr>`;
+    }
+  }
+
+  document.getElementById("recordBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("recordBtn");
+    const status = document.getElementById("recordStatus");
+    const patientSelect = document.getElementById("recordPatientSelect");
+
+    if (!patientSelect.value) {
+      showMsg(status, "Please select a patient first.", "error");
+      return;
+    }
+
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(track => track.stop());
+          const blob = new Blob(recordedChunks, { type: "audio/webm" });
+          await uploadRecording(blob, patientSelect.value);
+        };
+
+        mediaRecorder.start();
+        btn.textContent = "⏹️ Stop Recording";
+        patientSelect.disabled = true;
+        showMsg(status, "Recording... speak your findings, then click Stop.", "success");
+      } catch (err) {
+        showMsg(status, "Could not access microphone: " + err.message, "error");
+      }
+    } else {
+      mediaRecorder.stop();
+      btn.textContent = "🎙️ Start Recording";
+      showMsg(status, "Processing recording...", "success");
+    }
+  });
+
+  async function uploadRecording(blob, patientId) {
+    const status = document.getElementById("recordStatus");
+    const patientSelect = document.getElementById("recordPatientSelect");
+    const formData = new FormData();
+    formData.append("audio", blob, "recording.webm");
+    formData.append("patient_id", patientId);
+
+    try {
+      const { report } = await apiUpload("/api/reports/record", formData);
+      activeReportId = report.id;
+      document.getElementById("transcriptText").value = report.transcript_text;
+      document.getElementById("transcriptWrap").style.display = "block";
+      showMsg(status, `Transcribed successfully for ${report.patient_name}. Review and edit below.`, "success");
+    } catch (err) {
+      showMsg(status, err.message, "error");
+    } finally {
+      patientSelect.disabled = false;
+    }
+  }
+
+  document.getElementById("saveCorrectionBtn").addEventListener("click", async () => {
+    const msg = document.getElementById("reportActionMsg");
+    if (!activeReportId) return;
+    try {
+      await apiFetch(`/api/reports/${activeReportId}/correct`, {
+        method: "PUT",
+        body: JSON.stringify({ transcript_text: document.getElementById("transcriptText").value }),
+      });
+      showMsg(msg, "Report updated.", "success");
+    } catch (err) {
+      showMsg(msg, err.message, "error");
+    }
+  });
+
+  document.getElementById("downloadReportBtn").addEventListener("click", () => {
+    if (!activeReportId) return;
+    window.open(`/api/reports/${activeReportId}/download`, "_blank");
+  });
+
+  document.getElementById("sendToPatientBtn").addEventListener("click", async () => {
+    const msg = document.getElementById("reportActionMsg");
+    if (!activeReportId) return;
+    try {
+      const result = await apiFetch(`/api/reports/${activeReportId}/send-to-patient`, { method: "POST" });
+      showMsg(msg, result.message, "success");
+    } catch (err) {
+      showMsg(msg, err.message, "error");
+    }
+  });
+
+  document.getElementById("logoutLink").addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch (_) {}
+    window.location.href = "home.html";
+  });
+
+  document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("uploadMsg");
+    const fileInput = document.getElementById("scanFile");
+
+    if (!fileInput.files.length) {
+      showMsg(msg, "Please choose a file.", "error");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    formData.append("body_part", document.getElementById("bodyPart").value);
+    formData.append("notes", document.getElementById("notes").value);
+
+    const patientSelect = document.getElementById("patientSelect");
+    if (patientSelect) formData.append("patient_id", patientSelect.value);
+
+    try {
+      await apiUpload("/api/scans/upload", formData);
+      showMsg(msg, "Scan uploaded successfully.", "success");
+      fileInput.value = "";
+      document.getElementById("bodyPart").value = "";
+      document.getElementById("notes").value = "";
+      loadScans();
+    } catch (err) {
+      showMsg(msg, err.message, "error");
+    }
+  });
+
+  (async function init() {
+    currentUser = await loadMe();
+    if (!currentUser) return;
+    renderUser(currentUser);
+    loadScans();
+  })();
+</script>
+</body>
+</html>

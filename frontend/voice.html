@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Voice Report - Medictate</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body>
+<nav>
+  <a href="home.html" class="brand">Medictate</a>
+  <div>
+    <a href="home.html">Home</a>
+    <a href="upload.html">Upload Scan</a>
+    <a href="history.html">History</a>
+    <a href="voice.html">Voice Report</a>
+    <a href="#" id="logoutLink">Logout</a>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h1>Dictate a report (doctors only)</h1>
+    <label>Scan ID</label>
+    <input type="number" id="scanId" placeholder="Enter the scan ID this report is for" />
+
+    <div style="margin-top:16px;">
+      <button id="recordBtn">Start recording</button>
+      <button id="stopBtn" class="secondary" disabled>Stop</button>
+      <span id="recIndicator" style="display:none;"><span class="rec-dot"></span>Recording...</span>
+    </div>
+
+    <audio id="playback" controls style="display:none; margin-top:14px; width:100%;"></audio>
+
+    <button id="transcribeBtn" disabled>Transcribe & generate report</button>
+    <p id="msg" class="msg"></p>
+  </div>
+
+  <div class="card" id="editCard" style="display:none;">
+    <h2>Review & correct transcript</h2>
+    <textarea id="transcriptText"></textarea>
+    <button id="saveBtn">Save correction</button>
+    <button id="downloadBtn" class="secondary">Download .docx</button>
+    <p id="editMsg" class="msg"></p>
+  </div>
+
+  <div class="card" id="sendCard" style="display:none;">
+    <h2>Send to patient</h2>
+    <p>Generates a one-time secure link (API key) and emails it to the patient.</p>
+    <button id="sendBtn">Send report to patient</button>
+    <p id="sendMsg" class="msg"></p>
+  </div>
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+let mediaRecorder, audioChunks = [], recordedBlob = null, currentReport = null;
+
+(async () => {
+  const user = await requireLogin();
+  if (!user) return;
+  if (user.role !== "doctor") {
+    document.querySelector(".container").innerHTML =
+      `<div class="card"><p>Only doctors can dictate reports. Patients will see their reports once shared.</p></div>`;
+  }
+})();
+
+document.getElementById("recordBtn").addEventListener("click", async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mediaRecorder = new MediaRecorder(stream);
+  audioChunks = [];
+  mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+  mediaRecorder.onstop = () => {
+    recordedBlob = new Blob(audioChunks, { type: "audio/webm" });
+    const url = URL.createObjectURL(recordedBlob);
+    const audioEl = document.getElementById("playback");
+    audioEl.src = url;
+    audioEl.style.display = "block";
+    document.getElementById("transcribeBtn").disabled = false;
+  };
+  mediaRecorder.start();
+  document.getElementById("recordBtn").disabled = true;
+  document.getElementById("stopBtn").disabled = false;
+  document.getElementById("recIndicator").style.display = "inline";
+});
+
+document.getElementById("stopBtn").addEventListener("click", () => {
+  mediaRecorder.stop();
+  document.getElementById("recordBtn").disabled = false;
+  document.getElementById("stopBtn").disabled = true;
+  document.getElementById("recIndicator").style.display = "none";
+});
+
+document.getElementById("transcribeBtn").addEventListener("click", async () => {
+  const msg = document.getElementById("msg");
+  const scanId = document.getElementById("scanId").value;
+  if (!scanId) return showMsg(msg, "Enter the scan ID first.", "error");
+  if (!recordedBlob) return showMsg(msg, "Record audio first.", "error");
+
+  const formData = new FormData();
+  formData.append("audio", recordedBlob, "dictation.webm");
+
+  try {
+    showMsg(msg, "Transcribing...", "success");
+    const data = await apiFetch(`/reports/${scanId}/transcribe`, { method: "POST", body: formData });
+    currentReport = data.report;
+    document.getElementById("transcriptText").value = currentReport.transcript_text;
+    document.getElementById("editCard").style.display = "block";
+    document.getElementById("sendCard").style.display = "block";
+    showMsg(msg, "Transcription complete. Review below.", "success");
+  } catch (err) {
+    showMsg(msg, err.message, "error");
+  }
+});
+
+document.getElementById("saveBtn").addEventListener("click", async () => {
+  const editMsg = document.getElementById("editMsg");
+  try {
+    const data = await apiFetch(`/reports/${currentReport.id}/correct`, {
+      method: "PUT",
+      body: JSON.stringify({ transcript_text: document.getElementById("transcriptText").value }),
+    });
+    currentReport = data.report;
+    showMsg(editMsg, "Correction saved and document regenerated.", "success");
+  } catch (err) {
+    showMsg(editMsg, err.message, "error");
+  }
+});
+
+document.getElementById("downloadBtn").addEventListener("click", () => {
+  if (!currentReport) return;
+  window.open(`http://localhost:5000/api/reports/${currentReport.id}/download`, "_blank");
+});
+
+document.getElementById("sendBtn").addEventListener("click", async () => {
+  const sendMsg = document.getElementById("sendMsg");
+  try {
+    const data = await apiFetch(`/reports/${currentReport.id}/send-to-patient`, { method: "POST" });
+    showMsg(sendMsg, data.message + (data.download_link ? ` Link: ${data.download_link}` : ""), "success");
+  } catch (err) {
+    showMsg(sendMsg, err.message, "error");
+  }
+});
+
+document.getElementById("logoutLink").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await apiFetch("/auth/logout", { method: "POST" });
+  window.location.href = "login.html";
+});
+</script>
+</body>
+</html>

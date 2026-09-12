@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Sign Up - Medictate</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body>
+<nav>
+  <a href="home.html" class="brand">Medictate</a>
+  <div><a href="login.html">Login</a></div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h1>Create an account</h1>
+    <form id="signupForm">
+      <label>Full name</label>
+      <input type="text" id="name" required />
+      <label>Email</label>
+      <input type="email" id="email" required />
+      <label>Password</label>
+      <input type="password" id="password" required minlength="6" />
+      <label>I am a</label>
+      <select id="role">
+        <option value="patient">Patient</option>
+        <option value="doctor">Doctor</option>
+      </select>
+
+      <div id="specialtyWrap" style="display:none;">
+        <label>Specialty</label>
+        <input type="text" id="specialty" placeholder="e.g. Radiologist - Chest" />
+      </div>
+
+      <div id="patientFieldsWrap">
+        <label>Date of birth</label>
+        <input type="date" id="dob" />
+
+        <label>Age</label>
+        <input type="number" id="age" min="0" max="120" readonly />
+
+        <label>Phone number</label>
+        <input type="tel" id="phone" placeholder="e.g. 9876543210" pattern="[0-9]{10}" />
+      </div>
+
+      <button type="submit">Sign up</button>
+      <p id="msg" class="msg"></p>
+    </form>
+    <p>Already have an account? <a href="login.html">Log in</a></p>
+  </div>
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+const roleSelect = document.getElementById("role");
+const specialtyWrap = document.getElementById("specialtyWrap");
+const patientFieldsWrap = document.getElementById("patientFieldsWrap");
+const dobInput = document.getElementById("dob");
+const ageInput = document.getElementById("age");
+
+function toggleRoleFields() {
+  const isDoctor = roleSelect.value === "doctor";
+  specialtyWrap.style.display = isDoctor ? "block" : "none";
+  patientFieldsWrap.style.display = isDoctor ? "none" : "block";
+}
+roleSelect.addEventListener("change", toggleRoleFields);
+toggleRoleFields(); // set correct initial state on page load
+
+dobInput.addEventListener("change", () => {
+  const dob = new Date(dobInput.value);
+  if (isNaN(dob)) return;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const hadBirthday = today.getMonth() > dob.getMonth() ||
+    (today.getMonth() === dob.getMonth() && today.getDate() >= dob.getDate());
+  if (!hadBirthday) age--;
+  ageInput.value = age;
+});
+
+document.getElementById("signupForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("msg");
+  const email = document.getElementById("email").value.trim();
+
+  const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+  if (!emailRegex.test(email)) {
+    showMsg(msg, "Please enter a valid email address.", "error");
+    return;
+  }
+
+  const payload = {
+    name: document.getElementById("name").value,
+    email,
+    password: document.getElementById("password").value,
+    role: roleSelect.value,
+  };
+
+  if (roleSelect.value === "doctor") {
+    payload.specialty = document.getElementById("specialty").value;
+  } else {
+    if (!dobInput.value) {
+      showMsg(msg, "Please enter your date of birth.", "error");
+      return;
+    }
+    const phone = document.getElementById("phone").value;
+    if (phone && !/^[0-9]{10}$/.test(phone)) {
+      showMsg(msg, "Please enter a valid 10-digit phone number.", "error");
+      return;
+    }
+    payload.dob = dobInput.value;
+    payload.phone = phone;
+  }
+
+  try {
+    await apiFetch("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    window.location.href = "dashboard.html";
+  } catch (err) {
+    showMsg(msg, err.message, "error");
+  }
+});
+</script>
+</body>
+</html>
