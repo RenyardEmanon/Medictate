@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>History - Medictate</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body>
+<nav>
+  <a href="home.html" class="brand-with-logo">
+    <span class="nav-logo">M</span>
+    Medictate
+  </a>
+  <div>
+    <a href="home.html">Home</a>
+    <a href="upload.html">Upload Scan</a>
+    <a href="history.html">History</a>
+    <a href="voice.html">Voice Report</a>
+    <a href="#" id="logoutLink">Logout</a>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h1>Scan history</h1>
+    <table id="scanTable">
+      <thead>
+        <tr><th>ID</th><th>Filename</th><th>Body part</th><th>Status</th><th>Uploaded</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p id="msg" class="msg"></p>
+  </div>
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+(async () => {
+  const user = await requireLogin();
+  if (!user) return;
+
+  try {
+    const data = await apiFetch("/scans/history");
+    const tbody = document.querySelector("#scanTable tbody");
+    if (data.scans.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6">No scans yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.scans.map(s => `
+      <tr>
+        <td>${s.id}</td>
+        <td>${s.filename}</td>
+        <td>${s.body_part || "-"}</td>
+        <td><span class="badge">${s.status}</span></td>
+        <td>${new Date(s.uploaded_at).toLocaleString()}</td>
+        <td><a href="${'http://localhost:5000/api/scans/' + s.id + '/file'}" target="_blank">View</a></td>
+      </tr>
+    `).join("");
+  } catch (err) {
+    showMsg(document.getElementById("msg"), err.message, "error");
+  }
+})();
+
+document.getElementById("logoutLink").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await apiFetch("/auth/logout", { method: "POST" });
+  window.location.href = "login.html";
+});
+</script>
+</body>
+</html>

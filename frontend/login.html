@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Login - Medictate</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body>
+<p style="background:yellow;padding:8px;">DEBUG: page loaded at <span id="debugTime"></span></p>
+<script>document.getElementById("debugTime").textContent = new Date().toLocaleTimeString();</script>
+<nav>
+  <a href="home.html" class="brand-with-logo">
+    <span class="nav-logo">M</span>
+    Medictate
+  </a>
+  <div><a href="signup.html">Sign up</a></div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h1>Log in</h1>
+    <form id="loginForm">
+      <label>Email</label>
+      <input type="email" id="email" required />
+      <label>Password</label>
+      <input type="password" id="password" required />
+      <button type="submit">Login</button>
+      <p id="msg" class="msg"></p>
+    </form>
+    <p>Don't have an account? <a href="signup.html">Sign up</a></p>
+  </div>
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+document.getElementById("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("msg");
+
+  try {
+    await apiFetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        email: document.getElementById("email").value.trim(),
+        password: document.getElementById("password").value,
+      }),
+    });
+    window.location.href = "dashboard.html";
+  } catch (err) {
+    showMsg(msg, err.message, "error");
+  }
+});
+</script>
+</body>
+</html>

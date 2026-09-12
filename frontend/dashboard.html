@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Dashboard - Medictate</title>
+<link rel="stylesheet" href="static/css/style.css" />
+</head>
+<body class="dashboard-page">
+<img
+  src="mri.jpg"
+  alt=""
+  aria-hidden="true"
+  class="landing-bg-image"
+/>
+<div class="landing-bg-overlay" aria-hidden="true"></div>
+
+<nav>
+  <a href="home.html" class="brand-with-logo">
+    <span class="nav-logo">M</span>
+    Medictate
+  </a>
+  <div><a href="#" id="logoutLink">Logout</a></div>
+</nav>
+
+<div class="container" style="max-width: 900px;">
+
+  <div class="card">
+    <div id="userSummary">Loading...</div>
+  </div>
+
+  <div class="card" id="doctorBoxWrap" style="display:none; margin-top: 20px;"></div>
+
+  <div class="card" id="chooseDoctorWrap" style="display:none; margin-top: 20px;">
+    <h1>Choose a doctor</h1>
+    <div id="doctorListWrap">Loading...</div>
+  </div>
+
+  <div class="card" id="pendingRequestsWrap" style="display:none; margin-top: 20px;">
+    <h1>Pending patient requests</h1>
+    <div id="pendingRequestsList">Loading...</div>
+  </div>
+
+  <div class="card" id="myReportsWrap" style="display:none; margin-top: 20px;">
+    <h1>Your Reports</h1>
+    <div id="myReportsList">Loading...</div>
+  </div>
+
+  <div class="card" id="patientsCardWrap" style="display:none; margin-top: 20px;">
+    <h1>Your Patients</h1>
+    <div id="patientsListWrap">Loading...</div>
+  </div>
+
+  <div class="card" id="uploadFormWrap" style="display:none; margin-top: 20px;">
+    <h1>Upload a scan</h1>
+    <form id="uploadForm">
+      <label>File (image / PDF)</label>
+      <input type="file" id="scanFile" accept=".png,.jpg,.jpeg,.pdf,.dcm" required />
+
+      <label>Body part</label>
+      <input type="text" id="bodyPart" placeholder="e.g. Chest" />
+
+      <label>Notes</label>
+      <textarea id="notes" placeholder="Optional notes"></textarea>
+
+      <label>Voice report (optional)</label>
+      <div>
+        <button type="button" id="recordBtn">🎙️ Start Recording</button>
+        <span id="recordIndicator" style="margin-left: 10px; color: var(--success); display:none;">● Voice note attached</span>
+      </div>
+      <p id="recordStatus" class="msg"></p>
+
+      <button type="submit">Upload</button>
+      <p id="uploadMsg" class="msg"></p>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top: 20px;">
+    <h1>Scan history</h1>
+    <table id="scanTable">
+      <thead>
+        <tr><th>File</th><th>Body part</th><th>Status</th><th>Uploaded</th></tr>
+      </thead>
+      <tbody><tr><td colspan="4">Loading...</td></tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script src="static/js/main.js"></script>
+<script>
+  let currentUser = null;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordedBlob = null; // holds the finished recording until form submit
+
+  async function loadMe() {
+    try {
+      const { user } = await apiFetch("/api/auth/me");
+      return user;
+    } catch (err) {
+      window.location.href = "login.html";
+      return null;
+    }
+  }
+
+  function renderUser(user) {
+    const el = document.getElementById("userSummary");
+    el.innerHTML = `
+      <h1>Welcome, ${user.name}</h1>
+      <p>${user.email} &nbsp; <span class="badge">${user.role}</span>${user.specialty ? ` &middot; ${user.specialty}` : ""}</p>
+    `;
+
+    if (user.role === "patient") {
+      document.getElementById("uploadFormWrap").style.display = "none";
+
+      const wrap = document.getElementById("doctorBoxWrap");
+
+      if (user.assigned_doctor) {
+        wrap.style.display = "block";
+        wrap.innerHTML = `
+          <div class="doctor-box">
+            <div class="avatar">${user.assigned_doctor.name.charAt(0).toUpperCase()}</div>
+            <div>
+              <strong>Your doctor: ${user.assigned_doctor.name}</strong><br/>
+              <span>${user.assigned_doctor.specialty || "Radiologist"}</span>
+            </div>
+          </div>
+        `;
+        document.getElementById("myReportsWrap").style.display = "block";
+        loadMyReports();
+      } else {
+        // No doctor yet - show the doctor-selection list instead.
+        wrap.style.display = "none";
+        document.getElementById("chooseDoctorWrap").style.display = "block";
+        loadDoctorList();
+      }
+    } else {
+      document.getElementById("pendingRequestsWrap").style.display = "block";
+      loadPendingRequests();
+      loadDoctorPatients();
+    }
+  }
+
+  async function loadMyReports() {
+    const listEl = document.getElementById("myReportsList");
+    try {
+      const { reports } = await apiFetch("/api/reports/my");
+      if (!reports.length) {
+        listEl.innerHTML = `<p>No reports yet.</p>`;
+        return;
+      }
+      listEl.innerHTML = reports.map(r => `
+        <div style="padding: 14px 0; border-bottom: 1px solid var(--border);">
+          <p style="margin:0 0 6px; color: var(--muted); font-size: 13px;">
+            ${new Date(r.created_at).toLocaleString()}
+          </p>
+          <p style="margin:0 0 10px; white-space: pre-wrap; line-height: 1.6;">${r.transcript_text}</p>
+          <a href="/api/reports/${r.id}/download" target="_blank">
+            <button type="button" class="secondary">Download as Word</button>
+          </a>
+        </div>
+      `).join("");
+    } catch (err) {
+      listEl.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  // ---- Patient: browse doctors and send a request ----
+
+  async function loadDoctorList() {
+    const wrap = document.getElementById("doctorListWrap");
+    try {
+      const { doctors } = await apiFetch("/api/auth/doctors");
+      if (!doctors.length) {
+        wrap.innerHTML = `<p>No doctors available right now.</p>`;
+        return;
+      }
+      wrap.innerHTML = doctors.map(d => {
+        let actionHtml;
+        if (d.request_status === "pending") {
+          actionHtml = `<span class="badge">Request pending</span>`;
+        } else if (d.request_status === "accepted") {
+          actionHtml = `<span class="badge">Accepted</span>`;
+        } else {
+          actionHtml = `<button type="button" class="requestBtn" data-doctor-id="${d.id}">Request this doctor</button>`;
+        }
+        return `
+          <div class="doctor-box" style="margin-bottom: 12px;">
+            <div class="avatar">${d.name.charAt(0).toUpperCase()}</div>
+            <div style="flex:1;">
+              <strong>${d.name}</strong><br/>
+              <span>${d.specialty || "Radiologist"}</span>
+            </div>
+            ${actionHtml}
+          </div>
+        `;
+      }).join("");
+
+      wrap.querySelectorAll(".requestBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiFetch("/api/auth/request-doctor", {
+              method: "POST",
+              body: JSON.stringify({ doctor_id: parseInt(btn.dataset.doctorId, 10) }),
+            });
+            loadDoctorList(); // refresh so the button becomes "Request pending"
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      wrap.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  // ---- Doctor: view + accept/reject pending patient requests ----
+
+  async function loadPendingRequests() {
+    const wrap = document.getElementById("pendingRequestsList");
+    try {
+      const { requests } = await apiFetch("/api/auth/pending-requests");
+      if (!requests.length) {
+        wrap.innerHTML = `<p>No pending requests.</p>`;
+        return;
+      }
+      wrap.innerHTML = requests.map(r => `
+        <div class="doctor-box" style="margin-bottom: 12px;">
+          <div class="avatar">${r.patient_name.charAt(0).toUpperCase()}</div>
+          <div style="flex:1;">
+            <strong>${r.patient_name}</strong><br/>
+            <span>${r.patient_email}</span>
+          </div>
+          <button type="button" class="acceptBtn" data-request-id="${r.id}">Accept</button>
+          <button type="button" class="secondary rejectBtn" data-request-id="${r.id}">Reject</button>
+        </div>
+      `).join("");
+
+      wrap.querySelectorAll(".acceptBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiFetch(`/api/auth/requests/${btn.dataset.requestId}/accept`, { method: "POST" });
+            loadPendingRequests();
+            loadDoctorPatients();
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+
+      wrap.querySelectorAll(".rejectBtn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await apiFetch(`/api/auth/requests/${btn.dataset.requestId}/reject`, { method: "POST" });
+            loadPendingRequests();
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      wrap.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  async function loadDoctorPatients() {
+    const cardWrap = document.getElementById("patientsCardWrap");
+    const listWrap = document.getElementById("patientsListWrap");
+    const uploadWrap = document.getElementById("uploadFormWrap");
+    cardWrap.style.display = "block";
+
+    try {
+      const { patients } = await apiFetch("/api/auth/my-patients");
+
+      if (!patients.length) {
+        listWrap.innerHTML = `<p>No patients under you.</p>`;
+        uploadWrap.style.display = "none";
+        return;
+      }
+
+      listWrap.innerHTML = `
+        <label>Select a patient</label>
+        <select id="patientSelect">
+          ${patients.map(p => `<option value="${p.id}">${p.name} (${p.email})</option>`).join("")}
+        </select>
+      `;
+      uploadWrap.style.display = "block";
+    } catch (err) {
+      listWrap.innerHTML = `<p class="msg error">${err.message}</p>`;
+    }
+  }
+
+  async function loadScans() {
+    const tbody = document.querySelector("#scanTable tbody");
+    try {
+      const { scans } = await apiFetch("/api/scans/history");
+      if (!scans.length) {
+        tbody.innerHTML = `<tr><td colspan="4">No scans yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = scans.map(s => `
+        <tr>
+          <td>${s.filename}</td>
+          <td>${s.body_part || "-"}</td>
+          <td>${s.status}</td>
+          <td>${new Date(s.uploaded_at).toLocaleString()}</td>
+        </tr>
+      `).join("");
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="4" class="msg error">${err.message}</td></tr>`;
+    }
+  }
+
+  document.getElementById("recordBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("recordBtn");
+    const status = document.getElementById("recordStatus");
+    const indicator = document.getElementById("recordIndicator");
+
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach(track => track.stop());
+          recordedBlob = new Blob(recordedChunks, { type: "audio/webm" });
+          indicator.style.display = "inline";
+          showMsg(status, "Recording captured. It'll be transcribed when you click Upload.", "success");
+        };
+
+        mediaRecorder.start();
+        btn.textContent = "⏹️ Stop Recording";
+        indicator.style.display = "none";
+        recordedBlob = null;
+        showMsg(status, "Recording... speak your findings, then click Stop.", "success");
+      } catch (err) {
+        showMsg(status, "Could not access microphone: " + err.message, "error");
+      }
+    } else {
+      mediaRecorder.stop();
+      btn.textContent = "🎙️ Start Recording";
+    }
+  });
+
+  document.getElementById("logoutLink").addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch (_) {}
+    window.location.href = "home.html";
+  });
+
+  document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("uploadMsg");
+    const fileInput = document.getElementById("scanFile");
+
+    if (!fileInput.files.length) {
+      showMsg(msg, "Please choose a file.", "error");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    formData.append("body_part", document.getElementById("bodyPart").value);
+    formData.append("notes", document.getElementById("notes").value);
+
+    const patientSelect = document.getElementById("patientSelect");
+    if (patientSelect) formData.append("patient_id", patientSelect.value);
+
+    if (recordedBlob) {
+      formData.append("audio", recordedBlob, "recording.webm");
+    }
+
+    try {
+      const result = await apiUpload("/api/scans/upload", formData);
+      let successMsg = "Scan uploaded successfully.";
+      if (result.report) successMsg += " Voice report transcribed and attached.";
+      if (result.transcription_warning) successMsg += ` (Note: ${result.transcription_warning})`;
+      showMsg(msg, successMsg, result.report || !recordedBlob ? "success" : "error");
+
+      fileInput.value = "";
+      document.getElementById("bodyPart").value = "";
+      document.getElementById("notes").value = "";
+      recordedBlob = null;
+      document.getElementById("recordIndicator").style.display = "none";
+      document.getElementById("recordStatus").textContent = "";
+
+      loadScans();
+    } catch (err) {
+      showMsg(msg, err.message, "error");
+    }
+  });
+
+  (async function init() {
+    currentUser = await loadMe();
+    if (!currentUser) return;
+    renderUser(currentUser);
+    loadScans();
+  })();
+</script>
+</body>
+</html>
